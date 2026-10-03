@@ -1,0 +1,13 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://entities/projectile.gd" id="1_projectile"]
+[ext_resource type="Texture2D" path="res://assets/weapons/cc0_bullet.png" id="2_bullet"]
+
+[node name="Projectile" type="Node2D"]
+script = ExtResource("1_projectile")
+
+[node name="BulletSprite" type="Sprite2D" parent="."]
+texture = ExtResource("2_bullet")
+scale = Vector2(0.075, 0.075)
+modulate = Color(1, 0.88, 0.72, 1)
+z_index = 1

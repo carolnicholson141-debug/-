@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://entities/player.gd" id="1_player"]
+[ext_resource type="Script" path="res://systems/auto_weapon.gd" id="2_weapon"]
+
+[node name="Player" type="Node2D"]
+script = ExtResource("1_player")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position_smoothing_enabled = true
+position_smoothing_speed = 11.0
+
+[node name="HeroSprite" type="AnimatedSprite2D" parent="."]
+offset = Vector2(0, -21.5)
+scale = Vector2(1, 1)
+z_index = -1
+
+[node name="Weapon" type="Node" parent="."]
+script = ExtResource("2_weapon")
