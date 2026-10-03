@@ -416,6 +416,54 @@ const ZOMBIE_VARIANTS := [
 		# 所以"能打到你的机枪尸"必定在画面里，不会出现视野外冷枪。
 		"ranged": {"range": 380.0, "interval": 1.6, "speed": 340.0, "damage_scale": 0.6},
 	},
+	# ---- 阶段1 新增的四种行为怪 ----
+	# 行为差异集中在 variant["behavior"]，由 zombie.gd 的对应 _tick_* 实现。
+	# 普通池怪（weight > 0）按 min_wave 逐步解锁；weight = 0 的只能被特殊入口刷出
+	# （溺亡者只从水域浮出，见 main 的水域刷怪，阶段3接入）。
+	{
+		# 快速近战怪：撕裂者。血薄、贴身速度快，中距离会先停半拍蓄力再扑咬——
+		# 与疾行者的差别在于"冲刺扑咬"这个动作本身，而不是单纯跑得快。
+		"sheet": 0, "label": "撕裂者", "radius": 11.0,
+		"hp_mult": 0.6, "speed_mult": 1.05, "damage_mult": 0.9, "xp": 2.0,
+		"scale_mult": 0.92, "tint": Color(1.0, 0.45, 0.62),
+		"anchor": Vector2(0.5, -21.5), "weight": 7.0, "min_wave": 3,
+		"behavior": "ripper",
+		"lunge": {"range_min": 130.0, "range_max": 310.0, "windup": 0.32,
+			"dash": 0.20, "dash_mult": 3.4, "damage_mult": 1.3, "cooldown": 2.6},
+	},
+	{
+		# 远程怪：喷吐者。射程比机枪尸更远、弹速更慢（躲得开），
+		# 玩家贴近时会后撤拉距离（kiting）—— 是唯一会"倒着走"的丧尸。
+		"sheet": 0, "label": "喷吐者", "radius": 13.0,
+		"hp_mult": 1.4, "speed_mult": 0.78, "damage_mult": 1.0, "xp": 3.0,
+		"scale_mult": 1.05, "tint": Color(0.55, 1.0, 0.55),
+		"anchor": Vector2(0.5, -21.5), "weight": 6.0, "min_wave": 4,
+		"behavior": "spitter",
+		"kite_dist": 190.0,
+		"ranged": {"range": 430.0, "interval": 2.2, "speed": 250.0, "damage_scale": 0.9},
+	},
+	{
+		# 重型怪：重锤。最肉、最慢、受击不硬直（叠甲的意义），
+		# 贴身时蓄力砸地，蓄力期间脚下出现扩散红圈预警，砸中范围圆形 AoE。
+		"sheet": 0, "label": "重锤", "radius": 18.0,
+		"hp_mult": 5.0, "speed_mult": 0.55, "damage_mult": 1.6, "xp": 8.0,
+		"scale_mult": 1.35, "tint": Color(0.72, 0.62, 0.55),
+		"anchor": Vector2(0.5, -21.5), "weight": 3.5, "min_wave": 6,
+		"behavior": "smasher",
+		"slam": {"trigger": 125.0, "radius": 120.0, "windup": 0.55,
+			"damage_mult": 1.8, "cooldown": 4.5},
+	},
+	{
+		# 水域怪：溺亡者。不进常规刷怪池（weight = 0），只从水域浮出（阶段3）。
+		# 在水里速度上浮、离水下沉——从水域里爬出来追人时明显变慢，
+		# 给玩家"下水道的东西没那么灵活"的观感，也让水域成为它们的巢。
+		"sheet": 0, "label": "溺亡者", "radius": 12.0,
+		"hp_mult": 1.1, "speed_mult": 0.95, "damage_mult": 1.0, "xp": 2.0,
+		"scale_mult": 1.0, "tint": Color(0.45, 0.85, 0.95),
+		"anchor": Vector2(0.5, -21.5), "weight": 0.0,
+		"behavior": "drowned",
+		"water_speed_mult": 1.3, "land_speed_mult": 0.85,
+	},
 ]
 
 # ---------------------------------------------------------------- 首领序列帧
@@ -486,6 +534,38 @@ const BOSS_ANCHOR := Vector2(
 	BOSS_FRAME_SIZE.x * 0.5 - 96.4,
 	BOSS_FRAME_SIZE.y * 0.5 - 228.0
 )
+
+## ---- 阶段1：首领强化参数 ----
+
+## 首领在 HUD 血条上的显示名。
+const BOSS_DISPLAY_NAME := "腐烂巨兽"
+
+## 首领精灵缩放（Kenney 43px 帧）。原 2.1 → 2.6：
+## 任务要求"体型明显更大"，43 × 2.6 ≈ 112px 屏幕高（原来 ≈ 90px），
+## 是普通丧尸（33px）的 3.4 倍、比精英（约 43px）高出两倍多。
+## zombie.gd 的首领血条 y 坐标由这个值推导（见那里注释），两者是一对。
+const BOSS_ART_SCALE := 2.6
+
+## 首领阶段阈值：血量比例降到该值以下进入下一阶段（1 → 2 → 3）。
+const BOSS_PHASE_2_AT := 0.66
+const BOSS_PHASE_3_AT := 0.33
+
+## 各阶段的移动速度倍率（乘在出怪波次速度上）。阶段 3 是狂暴态。
+const BOSS_PHASE_SPEED := [1.0, 1.18, 1.38]
+
+## 各阶段冲锋冷却（秒）。阶段 1 才有冲锋的话压不了场，从 1 就会冲。
+const BOSS_PHASE_CHARGE_CD := [4.2, 3.2, 2.2]
+
+## 阶段 2 起首领的召唤间隔（秒），每次在身边召唤 BOSS_SUMMON_COUNT 只普通丧尸。
+const BOSS_SUMMON_INTERVAL := 8.0
+const BOSS_SUMMON_COUNT := 3
+
+## 阶段 3 解锁的震地 AoE。trigger/radius 是距离与伤害半径(px)。
+const BOSS_SLAM := {"trigger": 150.0, "radius": 135.0, "windup": 0.6, "damage_mult": 1.6}
+
+## 首领死亡奖励：经验球数量与单颗经验范围。
+const BOSS_REWARD_GEMS := 10
+const BOSS_REWARD_XP := [4.0, 9.0]
 
 ## 变体外观抽取用的独立随机源。
 ##
@@ -806,17 +886,29 @@ func wave_damage_mult(wave: int) -> float:
 	return 1.0 + WAVE_DAMAGE_GROWTH * (wave - 1)
 
 
-## 按权重随机挑一个丧尸变体
-func pick_zombie_variant() -> Dictionary:
+## 按权重随机挑一个丧尸变体。
+##
+## wave 用于行为怪的逐步解锁：变体表里的 min_wave 没到就不进候选池，
+## 前几波的威胁梯度才平滑（第 1 波只会遇到普通丧尸和疾行者）。
+## weight <= 0 的变体（溺亡者）永远不会被抽中，只能由水域等特殊入口刷出。
+func pick_zombie_variant(wave: int = 1) -> Dictionary:
+	var pool: Array = []
 	var total := 0.0
 	for v: Dictionary in ZOMBIE_VARIANTS:
+		if float(v["weight"]) <= 0.0:
+			continue
+		if wave < int(v.get("min_wave", 1)):
+			continue
+		pool.append(v)
 		total += float(v["weight"])
+	if pool.is_empty():
+		return ZOMBIE_VARIANTS[0]
 	var roll := randf() * total
-	for v: Dictionary in ZOMBIE_VARIANTS:
+	for v: Dictionary in pool:
 		roll -= float(v["weight"])
 		if roll <= 0.0:
 			return v
-	return ZOMBIE_VARIANTS[0]
+	return pool[0]
 
 
 ## 取得（并缓存）某个丧尸的 SpriteFrames。

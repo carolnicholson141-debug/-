@@ -69,6 +69,16 @@ var _restart_button: Button
 var debug_provider: Callable = Callable()
 var _debug_visible: bool = false
 
+## ---- 阶段1：首领血条 ----
+## 放在**底部居中**：顶部已被经验条(0~24)、时间/波次(17~110)、横幅(74~122)占满，
+## 底部居中是唯一不与血条面板/物品栏(右下)/结算面板重叠的整块空地。
+## 复活提示在右下 dock 里、连杀提示在 -104 处，都离这个条有安全距离。
+var _boss_bar_wrap: Control
+var _boss_bar: ProgressBar
+var _boss_name: Label
+## 三个阶段各一套填充样式，预建复用（与 _hp_fill_normal 同一理由：避免高频重建）。
+var _boss_fill: Array[StyleBoxFlat] = []
+
 ## 由 Main 注入：返回当前开火模式字符串。
 ##
 ## 为什么需要它：开火模式**跨局保持**（玩家按F 的选择不该在重开时丢失），
@@ -95,6 +105,9 @@ func _ready() -> void:
 	Events.elite_spawned.connect(_on_elite_spawned)
 	Events.elite_charge_warning.connect(_on_elite_charge_warning)
 	Events.boss_spawned.connect(_on_boss_spawned)
+	Events.boss_health_changed.connect(_on_boss_health)
+	Events.boss_phase_changed.connect(_on_boss_phase)
+	Events.boss_defeated.connect(_on_boss_defeated)
 	Events.inventory_changed.connect(_on_inventory_changed)
 	Events.chest_opened.connect(_on_chest_opened)
 	Events.player_dodged.connect(_on_player_dodged)
@@ -126,6 +139,7 @@ func _build() -> void:
 	_build_perf_label()
 	_build_game_over()
 	_build_pause_overlay()
+	_build_boss_bar()
 
 func _build_hud_frames() -> void:
 	# 这些图片是新 HUD 的金属外框；文字和数值仍由下面的实时控件绘制。
@@ -631,6 +645,44 @@ func _build_streak_label() -> void:
 	_root.add_child(_streak_label)
 
 
+## 首领专用血条：底部居中的名字 + 大血条，阶段升档换填充色。
+## 独立于小怪头顶血条 —— 首领要的是"一场战斗的进度感"，不是一只怪的余量。
+func _build_boss_bar() -> void:
+	_boss_bar_wrap = Control.new()
+	_boss_bar_wrap.name = "BossBarWrap"
+	_boss_bar_wrap.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_boss_bar_wrap.offset_left = -220.0
+	_boss_bar_wrap.offset_right = 220.0
+	_boss_bar_wrap.offset_top = -54.0
+	_boss_bar_wrap.offset_bottom = -18.0
+	_boss_bar_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boss_bar_wrap.visible = false
+	_root.add_child(_boss_bar_wrap)
+
+	_boss_name = _make_label(GameData.BOSS_DISPLAY_NAME, 15, Color("#ff9a8a"))
+	_boss_name.position = Vector2(0.0, 0.0)
+	_boss_name.size = Vector2(440.0, 16.0)
+	_boss_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_boss_name.add_theme_color_override("font_outline_color", Color(0.05, 0.02, 0.02, 0.9))
+	_boss_name.add_theme_constant_override("outline_size", 4)
+	_boss_bar_wrap.add_child(_boss_name)
+
+	_boss_bar = ProgressBar.new()
+	_boss_bar.position = Vector2(20.0, 18.0)
+	_boss_bar.size = Vector2(400.0, 14.0)
+	_boss_bar.min_value = 0.0
+	_boss_bar.max_value = 1.0
+	_boss_bar.value = 1.0
+	_boss_bar.show_percentage = false
+	_boss_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_boss_bar.add_theme_stylebox_override("background", _flat(Color("#1a0f0e"), 4, Color("#8a3026"), 1))
+	# 阶段 1/2/3 的填充色：暗红 → 橙红 → 亮红。建一次存起来，阶段切换只换引用。
+	for col: Color in [Color("#b8433a"), Color("#d8683a"), Color("#ff4d43")]:
+		_boss_fill.append(_flat(col, 4))
+	_boss_bar.add_theme_stylebox_override("fill", _boss_fill[0])
+	_boss_bar_wrap.add_child(_boss_bar)
+
+
 ## ---------------------------------------------------------------- 信号回调
 
 ## 血条的低血量阈值。低于这个比例，血条和数字转成告警色。
@@ -732,6 +784,51 @@ func _on_boss_spawned(_pos: Vector2) -> void:
 	tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_interval(1.25)
 	tw.tween_property(_elite_alert, "modulate", Color(1.0, 1.0, 1.0, 0.0), 0.45)
+	# 底部首领血条同步亮出。血量由 boss_health_changed 驱动
+	# （spawn 时 Zombie 会先广播一次满血，这里只负责置位与样式）。
+	if _boss_bar_wrap != null:
+		_boss_name.text = GameData.BOSS_DISPLAY_NAME
+		_boss_bar.value = _boss_bar.max_value
+		_boss_bar.add_theme_stylebox_override("fill", _boss_fill[0])
+		_boss_bar_wrap.visible = true
+
+
+func _on_boss_health(current: float, maximum: float) -> void:
+	if _boss_bar == null:
+		return
+	_boss_bar.max_value = maxf(maximum, 1.0)
+	_boss_bar.value = clampf(current, 0.0, maximum)
+
+
+func _on_boss_phase(phase: int, _pos: Vector2) -> void:
+	if _boss_bar != null:
+		var idx := clampi(phase - 1, 0, _boss_fill.size() - 1)
+		_boss_bar.add_theme_stylebox_override("fill", _boss_fill[idx])
+	if _elite_alert == null:
+		return
+	var phase_colors := [Color("#ffcf6b"), Color("#ff9a5e"), Color("#ff4d43")]
+	var phase_names := ["", "警觉", "狂暴", "嗜血"]
+	_elite_alert.text = "☠ 首领进入%s阶段 %d！" % [String(phase_names[clampi(phase, 0, 3)]), phase]
+	_elite_alert.add_theme_color_override("font_color", phase_colors[clampi(phase - 1, 0, 2)])
+	_elite_alert.modulate = Color.WHITE
+	var tw := create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(1.1)
+	tw.tween_property(_elite_alert, "modulate", Color(1.0, 1.0, 1.0, 0.0), 0.4)
+
+
+func _on_boss_defeated(_pos: Vector2) -> void:
+	if _boss_bar_wrap != null:
+		_boss_bar_wrap.visible = false
+	if _upgrade_notice == null:
+		return
+	_upgrade_notice.text = "☠ 首领被击杀！战利品已掉落"
+	_upgrade_notice.modulate = Color("#ffd34d")
+	var tw := create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.tween_interval(1.4)
+	tw.tween_property(_upgrade_notice, "modulate", Color(1.0, 1.0, 1.0, 0.0), 0.4)
 
 
 func _on_xp(current: float, required: float) -> void:
@@ -834,6 +931,8 @@ func _on_game_over(summary: Dictionary) -> void:
 	]
 	_over_center.visible = true
 	_over_center.modulate = Color(1.0, 1.0, 1.0, 0.0)
+	if _boss_bar_wrap != null:
+		_boss_bar_wrap.visible = false
 	var tw := create_tween()
 	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
 	tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
@@ -844,6 +943,9 @@ func _on_game_over(summary: Dictionary) -> void:
 func _on_run_started() -> void:
 	_over_center.visible = false
 	_hp_bar.value = _hp_bar.max_value
+	# 新一局开始时收起首领血条：上一局的首领无论死没死都不在了。
+	if _boss_bar_wrap != null:
+		_boss_bar_wrap.visible = false
 	_xp_bar.value = 0.0
 	_xp_label.text = "经验  0 / 15      还差 15"
 	_time_label.text = "0:00"

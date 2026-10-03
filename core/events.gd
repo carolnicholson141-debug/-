@@ -56,6 +56,19 @@ signal elite_spawned(pos: Vector2)
 signal elite_charge_warning(pos: Vector2)
 signal boss_spawned(pos: Vector2)
 
+## 首领血量变化（HUD 顶部的首领专用血条）。
+## current / maximum 都是绝对值，由 Zombie 在 spawn 和每次受击时广播。
+signal boss_health_changed(current: float, maximum: float)
+
+## 首领进入新阶段（1/2/3）。HUD 用来弹提示、换血条配色。
+signal boss_phase_changed(phase: int, pos: Vector2)
+
+## 首领被击杀。HUD 收起血条，Main 负责在原地撒奖励。
+signal boss_defeated(pos: Vector2)
+
+## 水域刷怪预警：某个水域将在短延迟后浮出一只溺亡者（阶段3接入）。
+signal water_warning(pos: Vector2)
+
 ## 本局已存活秒数（每秒发一次）
 signal elapsed_time_changed(seconds: float)
 

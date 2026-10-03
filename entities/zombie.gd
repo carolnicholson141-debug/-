@@ -86,6 +86,45 @@ var _elite_charge_left: float = 0.0
 var _elite_charge_dir: Vector2 = Vector2.ZERO
 var _elite_aura_cd: float = 0.0
 
+## ---- 阶段1：行为怪状态 ----
+## 行为标签，来自 variant["behavior"]：
+##   "" 普通追击 / "ripper" 撕裂者(扑咬) / "spitter" 喷吐者(远程+拉扯)
+##   / "smasher" 重锤(砸地) / "drowned" 溺亡者(水域怪，速度随水况)
+## 空串走原有路径，对存量五种丧尸零开销。
+var behavior: String = ""
+
+## 撕裂者扑咬参数（variant["lunge"] 的拷贝）与运行时状态。
+var _lunge: Dictionary = {}
+var _lunge_cd: float = 0.0
+var _lunge_windup: float = 0.0
+var _lunge_dash_left: float = 0.0
+var _lunge_dir: Vector2 = Vector2.ZERO
+var _lunge_hit: bool = false
+
+## 重锤砸地参数与状态。windup > 0 时脚下画扩散红圈（见 _draw）。
+var _slam: Dictionary = {}
+var _slam_cd: float = 0.0
+var _slam_windup: float = 0.0
+## 砸地命中后的冲击波显示计时（>0 时 _draw 画扩散环）。
+var _slam_flash: float = 0.0
+
+## 外部速度修正（水域减速等），由 Main 每帧写入，默认 1.0。
+## 乘在移动积分上而不是 speed 上，出池重置为 1 即可，不污染 wave 速度倍率。
+var speed_scale: float = 1.0
+
+## ---- 阶段1：Boss 状态 ----
+## 当前阶段（1/2/3）。血量比例越过 GameData.BOSS_PHASE_*_AT 时升阶段。
+var boss_phase: int = 1
+## 出池时的基准速度。升阶段的速度加成乘在它上面，
+## 不然波次速度倍率一变，阶段加成的基数就漂了。
+var _boss_base_speed: float = 0.0
+var _boss_summon_cd: float = 0.0
+var _boss_charge_cd: float = 0.0
+var _boss_windup: float = 0.0
+var _boss_charge_left: float = 0.0
+var _boss_charge_dir: Vector2 = Vector2.ZERO
+var _boss_slam_windup: float = 0.0
+
 ## 本只丧尸的外观修正 {scale_mult, tint_shift, radius_mult}
 var _look: Dictionary = {}
 
@@ -160,6 +199,30 @@ func spawn(
 	_elite_charge_left = 0.0
 	_elite_charge_dir = Vector2.ZERO
 	_elite_aura_cd = 0.0
+	# ---- 阶段1：行为怪与 Boss 的出池重置 ----
+	# 池化铁律：这些状态上一只可能用过，漏一项就会出现
+	# "刚刷出来的撕裂者原地冲一刀"这类池化脏状态 bug。
+	behavior = String(variant.get("behavior", ""))
+	_lunge = variant.get("lunge", {})
+	_lunge_cd = 1.2 if not _lunge.is_empty() else 0.0
+	_lunge_windup = 0.0
+	_lunge_dash_left = 0.0
+	_lunge_dir = Vector2.ZERO
+	_lunge_hit = false
+	_slam = variant.get("slam", {})
+	_slam_cd = 1.5 if not _slam.is_empty() else 0.0
+	_slam_windup = 0.0
+	_slam_flash = 0.0
+	speed_scale = 1.0
+	boss_phase = 1
+	_boss_summon_cd = GameData.BOSS_SUMMON_INTERVAL * 0.6
+	_boss_charge_cd = float(GameData.BOSS_PHASE_CHARGE_CD[0])
+	_boss_windup = 0.0
+	_boss_charge_left = 0.0
+	_boss_charge_dir = Vector2.ZERO
+	_boss_slam_windup = 0.0
+	# 首领的阶段速度加成乘在"出池那刻"的速度上，先记基准。
+	_boss_base_speed = speed
 	# 分离力缓存必须清掉：池化复用时不重置的话，新丧尸出池后的第一帧
 	# 会带着上一只丧尸（可能是几百像素外那只）的推力开始移动，看起来像抽了一下。
 	_sep_cache = Vector2.ZERO
@@ -181,8 +244,10 @@ func spawn(
 	_ranged = variant.get("ranged", {})
 	_fire_cd = float(_ranged.get("interval", 1.5)) if not _ranged.is_empty() else 0.0
 	if p_boss:
-		# 首领也使用同一套 43px Kenney 俯视角角色，只用尺寸和机器人皮肤体现等级。
-		_anim.scale = Vector2(2.1, 2.1)
+		# 首领与普通丧尸共用 43px Kenney 俯视帧，用尺寸体现等级。
+		# 缩放从 GameData.BOSS_ART_SCALE 注入（2.6 ≈ 112px 屏幕高），
+		# 血条 y 坐标由同一常量推导，见 _draw。
+		_anim.scale = Vector2(GameData.BOSS_ART_SCALE, GameData.BOSS_ART_SCALE)
 		_base_offset = Vector2(0.0, -21.5)
 	else:
 		_base_offset = ELITE_ART_ANCHOR if p_elite else variant["anchor"]
@@ -208,6 +273,9 @@ func spawn(
 
 	_play(STATE_WALK)
 	queue_redraw()
+	# 首领出池就把满血血量广播给 HUD 的首领血条（HUD 常驻连接，时序安全）。
+	if p_boss:
+		Events.boss_health_changed.emit(hp, max_hp)
 
 func _boss_frames() -> SpriteFrames:
 	if _boss_frames_cache != null:
@@ -273,6 +341,11 @@ func tick(
 	else:
 		_anim.modulate = _base_tint
 
+	# 砸地冲击波的显示计时。放在最前面推进，不受下面任何分支 return 影响
+	# （与 _wobble_offset 里 hurt_shake 的处理同一理由）。
+	if _slam_flash > 0.0:
+		_slam_flash = maxf(0.0, _slam_flash - delta)
+
 	# 受击硬直：挨打时定住一小会儿，让打击感有反馈
 	if _stagger > 0.0:
 		_stagger -= delta
@@ -289,6 +362,9 @@ func tick(
 	# 走位逻辑完全复用下面那套（追人 + 分离），不需要单独的移动模式。
 	_tick_ranged(delta, to_player, dist2, player)
 
+	# 首领专属：阶段推进 + 冲锋/召唤/震地。返回 true 表示本帧被技能接管。
+	if is_boss and _tick_boss(delta, to_player, dist2, player):
+		return
 	if is_elite and not is_boss and _tick_elite_skill(delta, to_player, dist2, player):
 		return
 	if is_elite and elite_kind == 2:
@@ -297,6 +373,17 @@ func tick(
 			_elite_aura_cd = 1.35
 			player.take_damage(damage * 0.72)
 			queue_redraw()
+
+	# ---- 阶段1 行为怪：被技能接管时跳过普通移动 ----
+	match behavior:
+		"ripper":
+			if _tick_lunge(delta, to_player, dist2, player):
+				return
+		"smasher":
+			if _tick_slam(delta, to_player, dist2, player):
+				return
+		_:
+			pass
 
 	# 用平方距离比：能进攻击分支的丧尸直接省掉一次开方。
 	# 平方距离 >= attack_range² 时才有必要开方求方向，而那时开方是必需的。
@@ -319,10 +406,16 @@ func tick(
 		_sep_cache = _separation(grid)
 
 	var desired := to_player / sqrt(dist2)
+	# 喷吐者被贴脸时倒着拉开距离 —— 全游戏唯一会倒退走的丧尸。
+	# 只在"进入攻击距离之前"的近距段生效，真贴到咬人距离就走普通追击。
+	if behavior == "spitter":
+		var kite := float(variant.get("kite_dist", 190.0))
+		if dist2 < kite * kite:
+			desired = -desired * 0.85
 	var separation := _sep_cache.limit_length(1.0)
 	var steer := (desired + separation * GameData.SEPARATION_WEIGHT).normalized()
 
-	position += steer * speed * delta
+	position += steer * speed * speed_scale * delta
 	if is_elite:
 		queue_redraw()
 
@@ -414,6 +507,170 @@ func _tick_elite_skill(delta: float, to_player: Vector2, dist2: float, player: N
 		return true
 
 	return false
+
+
+## ---------------------------------------------------------------- 阶段1：行为怪技能
+##
+## 三个技能共用同一套"蓄力→爆发→冷却"三段式骨架：
+## 蓄力期间返回 true（本帧跳过普通移动），爆发帧一次性结算，
+## 之后回到普通追击直到冷却转好。预警全靠蓄力本身的视觉信号
+## （泛红 / 脚下红圈），不额外开新信号 —— 玩家靠观察躲，不靠 UI 轰炸。
+
+## 撕裂者：扑咬。中距离先停 windup 秒（泛红），然后朝锁定方向冲 dash 秒，
+## 冲刺途中碰到玩家结算一次伤害。方向锁定在蓄力结束那一刻，横移可躲。
+func _tick_lunge(delta: float, to_player: Vector2, dist2: float, player: Node2D) -> bool:
+	if _lunge.is_empty():
+		return false
+	_lunge_cd = maxf(0.0, _lunge_cd - delta)
+
+	if _lunge_windup > 0.0:
+		_lunge_windup -= delta
+		_anim.modulate = _base_tint.lerp(Color("#ff8fa0"), 0.5)
+		if _lunge_windup <= 0.0:
+			_lunge_dash_left = float(_lunge["dash"])
+			_lunge_dir = to_player.normalized() if dist2 > 0.001 else Vector2.RIGHT
+			_lunge_hit = false
+		return true
+
+	if _lunge_dash_left > 0.0:
+		_lunge_dash_left -= delta
+		position += _lunge_dir * speed * float(_lunge["dash_mult"]) * delta
+		_anim.flip_h = _lunge_dir.x < -0.05
+		_anim.modulate = _base_tint
+		if not _lunge_hit and player.alive:
+			var hit_range := radius + GameData.PLAYER_RADIUS + 6.0
+			if position.distance_squared_to(player.position) <= hit_range * hit_range:
+				_lunge_hit = true
+				player.take_damage(damage * float(_lunge["damage_mult"]))
+		return true
+
+	if _lunge_cd > 0.0:
+		return false
+	var rmin := float(_lunge["range_min"])
+	var rmax := float(_lunge["range_max"])
+	if dist2 < rmin * rmin or dist2 > rmax * rmax:
+		return false
+	_lunge_cd = float(_lunge["cooldown"])
+	_lunge_windup = float(_lunge["windup"])
+	return true
+
+
+## 重锤：砸地。贴身时蓄力 windup 秒（脚下扩散红圈，见 _draw），落锤时
+## 半径内结算 AoE。重型怪的受击不硬直（见 take_damage），所以蓄力只能打断它。
+func _tick_slam(delta: float, to_player: Vector2, dist2: float, player: Node2D) -> bool:
+	if _slam.is_empty():
+		return false
+	_slam_cd = maxf(0.0, _slam_cd - delta)
+
+	if _slam_windup > 0.0:
+		_slam_windup -= delta
+		_anim.modulate = _base_tint.lerp(Color("#ffb06b"), 0.4)
+		queue_redraw()
+		if _slam_windup <= 0.0:
+			_anim.modulate = _base_tint
+			_slam_flash = 0.25
+			var hit := float(_slam["radius"])
+			if player.alive and position.distance_squared_to(player.position) <= hit * hit:
+				player.take_damage(damage * float(_slam["damage_mult"]))
+			Events.blade_hit.emit(position)
+		return true
+
+	if _slam_cd > 0.0:
+		return false
+	var trigger := float(_slam["trigger"])
+	if dist2 > trigger * trigger:
+		return false
+	_slam_cd = float(_slam["cooldown"])
+	_slam_windup = float(_slam["windup"])
+	return true
+
+
+## 首领：三阶段战斗循环。
+##   阶段1 追击 + 中距离冲锋（有蓄力红光预警，复用 elite_charge_warning）；
+##   阶段2 提速、冲锋更频繁，开始周期性召唤普通丧尸（走 main 的刷怪通道）；
+##   阶段3 狂暴：再提速、贴身解锁震地 AoE（脚下红圈预警）。
+## 返回 true 表示本帧被技能接管（蓄力/冲刺/震地期间不走普通移动）。
+func _tick_boss(delta: float, to_player: Vector2, dist2: float, player: Node2D) -> bool:
+	_update_boss_phase()
+	_boss_charge_cd = maxf(0.0, _boss_charge_cd - delta)
+	_boss_summon_cd = maxf(0.0, _boss_summon_cd - delta)
+
+	# 阶段2+：周期召唤。走 world.on_boss_summon 让 Main 用对象池正常刷，
+	# 数量计入 MAX_ALIVE，不会绕过全局上限。
+	if boss_phase >= 2 and _boss_summon_cd <= 0.0 and world != null:
+		_boss_summon_cd = GameData.BOSS_SUMMON_INTERVAL
+		world.on_boss_summon(GameData.BOSS_SUMMON_COUNT, position)
+
+	# 冲刺进行中：直线碾压，撞到玩家结算一次。
+	if _boss_charge_left > 0.0:
+		_boss_charge_left -= delta
+		position += _boss_charge_dir * speed * 3.0 * delta
+		_anim.rotation = sin(_boss_charge_left * 40.0) * 0.05
+		queue_redraw()
+		if player.alive:
+			var hit_range := radius + GameData.PLAYER_RADIUS + 8.0
+			if position.distance_squared_to(player.position) <= hit_range * hit_range:
+				player.take_damage(damage * 1.5)
+				_boss_charge_left = 0.0
+				_anim.rotation = 0.0
+		return true
+
+	# 冲锋蓄力中：泛红 + 锁定方向。
+	if _boss_windup > 0.0:
+		_boss_windup -= delta
+		_anim.modulate = _base_tint.lerp(Color("#ff6b5e"), 0.45)
+		queue_redraw()
+		if _boss_windup <= 0.0:
+			_boss_charge_left = ELITE_CHARGE_DURATION
+			_boss_charge_dir = to_player.normalized() if dist2 > 0.001 else Vector2.RIGHT
+			_anim.modulate = _base_tint
+		return true
+
+	# 震地进行中（阶段3）。
+	if _boss_slam_windup > 0.0:
+		_boss_slam_windup -= delta
+		queue_redraw()
+		if _boss_slam_windup <= 0.0:
+			_slam_flash = 0.3
+			var hit := float(GameData.BOSS_SLAM["radius"])
+			if player.alive and position.distance_squared_to(player.position) <= hit * hit:
+				player.take_damage(damage * float(GameData.BOSS_SLAM["damage_mult"]))
+			Events.blade_hit.emit(position)
+		return true
+
+	_slam_cd = maxf(0.0, _slam_cd - delta)
+	if boss_phase >= 3 and _slam_cd <= 0.0:
+		var trigger := float(GameData.BOSS_SLAM["trigger"])
+		if dist2 <= trigger * trigger:
+			_slam_cd = 5.0
+			_boss_slam_windup = float(GameData.BOSS_SLAM["windup"])
+			return true
+
+	# 发起冲锋：全阶段可用，冷却随阶段缩短。
+	if _boss_charge_cd <= 0.0 and dist2 >= 120.0 * 120.0 and dist2 <= 560.0 * 560.0:
+		_boss_charge_cd = float(GameData.BOSS_PHASE_CHARGE_CD[boss_phase - 1])
+		_boss_windup = ELITE_CHARGE_WINDUP
+		Events.elite_charge_warning.emit(position)
+		queue_redraw()
+		return true
+
+	return false
+
+
+## 血量比例越过阈值时升阶段：提速、换警示色、广播事件。
+## 阶段只升不降（血量不会回涨，但用绝对判断写成幂等，防御未来加治疗）。
+func _update_boss_phase() -> void:
+	var ratio := hp_ratio()
+	var new_phase := 3 if ratio <= GameData.BOSS_PHASE_3_AT else (2 if ratio <= GameData.BOSS_PHASE_2_AT else 1)
+	if new_phase == boss_phase:
+		return
+	boss_phase = new_phase
+	speed = _boss_base_speed * float(GameData.BOSS_PHASE_SPEED[boss_phase - 1])
+	# 狂暴化视觉：底色往血红偏一档。_base_tint 在出池时重算，池化安全。
+	_base_tint = _base_tint.lerp(Color(0.85, 0.20, 0.16), 0.22)
+	_anim.modulate = _base_tint
+	Events.boss_phase_changed.emit(boss_phase, position)
+	queue_redraw()
 
 
 ## 走动起伏：静态贴图"活起来"的关键一招。
@@ -543,12 +800,13 @@ func take_damage(amount: float) -> void:
 	Events.enemy_hurt.emit(position, amount)
 
 	if hp > 0.0:
-		_state = STATE_HURT
-		_stagger = GameData.ZOMBIE_HURT_STAGGER
-		# 受击抖动强度按"这一击占它多少血"给，而不是恒定值：
-		# 打坦克一枪它几乎不抖，打残血小怪一枪它抖得厉害 —— 手感信息量更大。
 		_hurt_shake = clampf(amount / maxf(max_hp, 0.001), 0.25, 1.0)
-		_play(STATE_HURT)
+		# 重锤是重型单位：受击抖动保留（反馈还在），但不进硬直、不切 hurt 状态 ——
+		# 否则它会被任何 DPS 永久钉在原地，"最肉的怪"就名不副实了。
+		if behavior != "smasher":
+			_state = STATE_HURT
+			_stagger = GameData.ZOMBIE_HURT_STAGGER
+			_play(STATE_HURT)
 	else:
 		_start_death()
 
@@ -561,6 +819,9 @@ func _start_death() -> void:
 	_play(STATE_DEAD)
 	_death_timer = GameData.ZOMBIE_DEATH_LINGER
 	Events.enemy_killed.emit(position, xp_value, is_elite)
+	if is_boss:
+		# 首领掉落走独立事件：HUD 收血条、Main 撒奖励，都从这一声分开。
+		Events.boss_defeated.emit(position)
 	if world != null:
 		world.on_zombie_killed(self)
 	queue_redraw()
@@ -583,15 +844,37 @@ func hp_ratio() -> float:
 
 
 func _draw() -> void:
-	if not is_elite or not alive:
+	if not alive:
 		return
+
+	# ---- 砸地预警 / 冲击波（重锤与阶段3首领共用）----
+	# 这两个状态各自在 windup/flash 期间才 queue_redraw，普通丧尸不会走到这里。
+	if _slam_windup > 0.0 or _boss_slam_windup > 0.0:
+		var is_own: bool = _slam_windup > 0.0
+		var total: float = float(_slam["windup"]) if is_own else float(GameData.BOSS_SLAM["windup"])
+		var left: float = _slam_windup if is_own else _boss_slam_windup
+		var warn_r: float = float(_slam["radius"]) if is_own else float(GameData.BOSS_SLAM["radius"])
+		var t := 1.0 - clampf(left / maxf(total, 0.001), 0.0, 1.0)
+		var pulse := 0.55 + 0.45 * sin(left * 26.0)
+		# 内圈随蓄力进度扩张到伤害半径，外圈恒定提示边界 —— 一眼能读出"躲到圈外"。
+		draw_arc(Vector2.ZERO, warn_r * (0.3 + 0.7 * t), 0.0, TAU, 32,
+			Color(1.0, 0.22, 0.1, 0.3 + 0.45 * pulse * t), 3.0, true)
+		draw_arc(Vector2.ZERO, warn_r, 0.0, TAU, 32, Color(1.0, 0.3, 0.15, 0.18 + 0.45 * t), 2.0, true)
+	if _slam_flash > 0.0:
+		var fade := clampf(_slam_flash / 0.3, 0.0, 1.0)
+		draw_arc(Vector2.ZERO, (1.0 - fade) * 150.0, 0.0, TAU, 36,
+			Color(1.0, 0.6, 0.2, 0.5 * fade), 4.0, true)
+
+	if not is_elite:
+		return
+
+	# ---- 精英/首领血条 ----
 	var width := 72.0 if is_boss else 42.0
-	# 首领的 -142 与 GameData.BOSS_TARGET_HEIGHT 是一对，不能单独改：
-	# 110px 高的首领头顶在 -110，血条下沿 -137 正好留出 27px 空隙，
-	# 与精英（头顶 -66.8、血条 -102、空隙 30px）的观感一致。
-	# 当初这句和首领的缩放是分别写的，缩放沿着了 128px 帧的公式，
-	# 于是首领被画成 817px 高 —— 血条反而插进了身体中部。
-	var y := -78.0 if is_boss else -52.0
+	# 首领血条 y 由 BOSS_ART_SCALE 推导，两者是一对，改一个必须改另一个：
+	# Kenney 43px 帧 × 2.6 → 头顶在 -43×2.6 ≈ -112，
+	# 血条（高 5px）下沿 -118，留 6px 空隙，与精英的观感一致。
+	# （原 -78 是旧序列帧 110px 高时的校准值，素材换 Kenney 后已失准。）
+	var y := -123.0 if is_boss else -52.0
 	draw_rect(Rect2(-width * 0.5, y, width, 5.0), Color(0.08, 0.04, 0.05, 0.9), true)
 	var hp_col := Color("#c93c35") if is_boss else (Color("#ff6b5e") if elite_kind == 0 else (Color("#e9a14e") if elite_kind == 1 else Color("#65e887")))
 	draw_rect(Rect2(-width * 0.5, y, width * hp_ratio(), 5.0), hp_col, true)
@@ -599,10 +882,14 @@ func _draw() -> void:
 	draw_circle(Vector2(0.0, y - 5.0), 2.0, Color("#ffd35c"))
 	if is_boss:
 		draw_arc(Vector2.ZERO, radius + 24.0, 0.0, TAU, 40, Color(1.0, 0.18, 0.12, 0.30), 3.0, true)
+		# 阶段3 狂暴环：一圈红色脉冲，和 HUD 的阶段提示互相印证。
+		if boss_phase >= 3:
+			var rage := 0.3 + 0.25 * sin(Time.get_ticks_msec() * 0.009)
+			draw_arc(Vector2.ZERO, radius + 30.0, 0.0, TAU, 40, Color(1.0, 0.14, 0.08, rage), 3.5, true)
 	if _elite_windup > 0.0:
-		var pulse := 0.65 + 0.35 * sin(_elite_windup * 28.0)
-		var warning := Color(1.0, 0.18, 0.10, pulse)
+		var pulse2 := 0.65 + 0.35 * sin(_elite_windup * 28.0)
+		var warning := Color(1.0, 0.18, 0.10, pulse2)
 		draw_arc(Vector2.ZERO, radius + 8.0, 0.0, TAU, 28, warning, 3.0, true)
-		draw_arc(Vector2.ZERO, radius + 14.0, 0.0, TAU, 28, Color(1.0, 0.5, 0.2, pulse * 0.55), 2.0, true)
+		draw_arc(Vector2.ZERO, radius + 14.0, 0.0, TAU, 28, Color(1.0, 0.5, 0.2, pulse2 * 0.55), 2.0, true)
 	if elite_kind == 2 and _elite_aura_cd > 0.0:
 		draw_arc(Vector2.ZERO, radius + 18.0, 0.0, TAU, 32, Color(0.30, 1.0, 0.40, 0.25), 2.0, true)

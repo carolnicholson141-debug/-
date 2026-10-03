@@ -140,6 +140,10 @@ var _stress_wave: int = 12
 ## 那个尖峰是初始化的代价、不是稳态性能，不该混进测量结果。
 const STRESS_REFILL_PER_FRAME := 40
 
+## `-- --boss`：开局立即刷一只首领。给首领血条/阶段/掉落的开发与验收用 ——
+## 正常要打到第 10 波（约 4 分钟）才见首领，没有这个入口每次验证都要等。
+var _boss_test: bool = false
+
 ## 无头自动测试：自动走位 + 自动选升级。
 ## 存在的意义是让"调平衡"这件事可以无人值守地跑 —— 割草游戏的平衡就是它的全部，
 ## 靠手打一局一局试太慢了。用法：
@@ -260,6 +264,13 @@ func _apply_stress_arg() -> void:
 			return
 
 
+## 解析 `--boss`（首领即刷，开发验收用）
+func _apply_boss_arg() -> void:
+	_boss_test = "--boss" in OS.get_cmdline_user_args()
+	if _boss_test:
+		print("首领测试：开局立即刷一只首领")
+
+
 ## 每帧补足丧尸数量。
 ##
 ## 放在主循环最前面（建哈希之前）：这样新刷出来的丧尸当帧就进哈希、
@@ -285,7 +296,7 @@ func _maintain_stress() -> void:
 		var z: Zombie = zombie_pool.acquire()
 		z.world = self
 		z.spawn(
-			GameData.pick_zombie_variant(),
+			GameData.pick_zombie_variant(_stress_wave),
 			hp_mult, spd_mult, dmg_mult,
 			false,
 			ppos + Vector2.RIGHT.rotated(ang) * dist
@@ -305,6 +316,7 @@ func _ready() -> void:
 	_apply_seed_arg()
 	_parse_lod_args()
 	_apply_stress_arg()
+	_apply_boss_arg()
 	grid = SpatialHash.new(GameData.CELL_SIZE)
 
 
@@ -314,6 +326,7 @@ func _ready() -> void:
 
 	Events.player_died.connect(_on_player_died)
 	Events.item_used.connect(_on_item_used)
+	Events.boss_defeated.connect(_on_boss_defeated)
 
 	if autoplay:
 		start_screen.hide_screen()
@@ -529,6 +542,13 @@ func start_run() -> void:
 
 	Events.run_started.emit()
 	_apply_pending_start_rewards()
+
+	if _boss_test:
+		# 首领即刷：走正式的刷怪通道（_on_director_spawn），保证与第 10 波
+		# 真正出现的首领走完全相同的初始化路径，测出来的就是线上行为。
+		# 必须放在 run_started 之后：run_started 会让 HUD 收起首领血条，
+		# 先刷首领的话血条刚亮出就被盖掉了。
+		_on_director_spawn(1, true, true, player.position)
 
 func _show_start_screen() -> void:
 	get_tree().paused = true
@@ -937,15 +957,12 @@ func _spawn_map_loot() -> void:
 		var p := _random_loot_position(occupied, 105.0)
 		occupied.append(p)
 		var grenade := randf() < 0.55
-		var item := ITEM_SCRIPT.new()
-		entities.add_child(item)
-		item.setup(
+		_spawn_item_at(
 			p,
 			"grenade" if grenade else "potion",
 			"手榴弹" if grenade else "生命药剂",
 			Color("#e5a34b") if grenade else Color("#63e59b")
 		)
-		item_pickups.append(item)
 
 func _random_loot_position(occupied: Array[Vector2], min_distance: float) -> Vector2:
 	var arena := GameData.ARENA_HALF_SIZE - 90.0
@@ -1209,7 +1226,7 @@ func _on_director_spawn(count: int, elite: bool, boss: bool, player_pos: Vector2
 		# world 必须在 spawn 之前设好：spawn 之后的任何一帧都可能死亡，
 		# 而 _start_death 会回调 world.on_zombie_killed。
 		z.world = self
-		var chosen_variant: Dictionary = GameData.ZOMBIE_VARIANTS[3] if boss else GameData.pick_zombie_variant()
+		var chosen_variant: Dictionary = GameData.ZOMBIE_VARIANTS[3] if boss else GameData.pick_zombie_variant(director.wave)
 		# 精英种类用**本波内的序号**决定，不用 zombies.size()。
 		#
 		# ⚠ 原来写的是 `(director.wave + zombies.size()) % 3`，有两个问题：
@@ -1267,6 +1284,57 @@ func on_zombie_killed(z: Zombie) -> void:
 func on_human_killed(_human: Node, xp_value: float) -> void:
 	# 人类反派是独立敌对阵营，击杀同样计入连杀、经验和升级进度。
 	player.register_kill(xp_value)
+
+
+## 首领召唤回调（zombie.gd 阶段2 起周期调用）。
+## 在首领身边一小圈刷普通丧尸，走对象池与 MAX_ALIVE 全局上限 ——
+## 召唤只是"换了个出怪点的波次刷怪"，不允许绕过任何既有保护。
+func on_boss_summon(count: int, boss_pos: Vector2) -> void:
+	if _game_over or player == null or not player.alive:
+		return
+	var hp_mult := GameData.wave_hp_mult(director.wave)
+	var spd_mult := GameData.wave_speed_mult(director.wave)
+	var dmg_mult := GameData.wave_damage_mult(director.wave)
+	for _i in count:
+		if grid.object_count() >= GameData.MAX_ALIVE:
+			return
+		var z: Zombie = zombie_pool.acquire()
+		z.world = self
+		z.spawn(
+			GameData.pick_zombie_variant(director.wave),
+			hp_mult, spd_mult, dmg_mult,
+			false,
+			boss_pos + Vector2.RIGHT.rotated(randf() * TAU) * randf_range(50.0, 110.0)
+		)
+		zombies.append(z)
+
+
+## 首领被击杀：原地撒奖励 —— 一圈高价值经验球 + 手榴弹与药剂各一。
+## 经验球走 gem_pool（与击杀掉落同源，上限保护自动生效），
+## 物品走 item_pickup（与地图散落同源，靠近自动拾取）。
+func _on_boss_defeated(pos: Vector2) -> void:
+	if not player.alive:
+		return
+	var n := GameData.BOSS_REWARD_GEMS
+	for i in n:
+		var ang := TAU * float(i) / float(n) + randf() * 0.4
+		var g := gem_pool.acquire()
+		g.spawn(
+			pos + Vector2.RIGHT.rotated(ang) * randf_range(26.0, 84.0),
+			randf_range(GameData.BOSS_REWARD_XP[0], GameData.BOSS_REWARD_XP[1])
+		)
+		gems.append(g)
+	_spawn_item_at(pos + Vector2(38.0, 8.0), "grenade", "手榴弹", Color("#e5a34b"))
+	_spawn_item_at(pos + Vector2(-38.0, 8.0), "potion", "生命药剂", Color("#63e59b"))
+	Events.chest_opened.emit(pos, "首领战利品：大量经验 + 手榴弹 + 生命药剂")
+
+
+## 在指定位置放一个地面道具（地图散落与首领掉落共用）。
+func _spawn_item_at(p: Vector2, id: String, label: String, col: Color) -> void:
+	var item := ITEM_SCRIPT.new()
+	entities.add_child(item)
+	item.setup(p, id, label, col)
+	item_pickups.append(item)
 
 
 ## 玩家死亡：跑完主循环再统一广播，保证「存活时间」是完整的一整秒
