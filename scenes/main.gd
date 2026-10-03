@@ -490,13 +490,14 @@ func _aim_dir_for_player() -> Vector2:
 func _warm_assets() -> void:
 	# 丧尸（所有非首领变体共用）
 	GameData.kenney_zombie_frames()
-	# 首领
-	GameData.kenney_boss_frames()
 	# 精英
 	GameData.elite_zombie_frames()
 	# 玩家。闪避动画第一次按空格才 load 会卡一下 ——
 	# 而闪避恰恰是最吃手感、最不能卡的操作。
 	GameData.player_frames()
+	# 阶段2 自制怪物与首领素材
+	for key: String in ["ripper", "spitter", "smasher", "drowned", "boss_abomination"]:
+		GameData.monster_frames(key)
 
 
 func _build_pools() -> void:

@@ -244,11 +244,14 @@ func spawn(
 	_ranged = variant.get("ranged", {})
 	_fire_cd = float(_ranged.get("interval", 1.5)) if not _ranged.is_empty() else 0.0
 	if p_boss:
-		# 首领与普通丧尸共用 43px Kenney 俯视帧，用尺寸体现等级。
-		# 缩放从 GameData.BOSS_ART_SCALE 注入（2.6 ≈ 112px 屏幕高），
-		# 血条 y 坐标由同一常量推导，见 _draw。
-		_anim.scale = Vector2(GameData.BOSS_ART_SCALE, GameData.BOSS_ART_SCALE)
-		_base_offset = Vector2(0.0, -21.5)
+		# 首领用阶段2 自制素材（256px 画布、内容 120px 高、脚底贴底）。
+		# 缩放 = 目标屏幕高 ÷ 内容高，随素材尺寸自动换算，不再写死倍率；
+		# 锚点 = 画布半径取负，脚底落在节点原点 —— 与 Kenney 帧同一口径。
+		var boss_info: Dictionary = GameData.MONSTER_SPRITES.get("boss_abomination", {})
+		var content_h := maxf(float(boss_info.get("content_h", 43.0)), 1.0)
+		var boss_scale := GameData.BOSS_TARGET_HEIGHT / content_h
+		_anim.scale = Vector2(boss_scale, boss_scale)
+		_base_offset = Vector2(0.0, -float(boss_info.get("canvas", 64.0)) * 0.5)
 	else:
 		_base_offset = ELITE_ART_ANCHOR if p_elite else variant["anchor"]
 		var visual_elite_scale := 1.8 if p_elite and elite_kind == 1 else (1.35 if p_elite and elite_kind == 2 else (ELITE_SIZE_MULT if p_elite else 1.0))
@@ -277,37 +280,29 @@ func spawn(
 	if p_boss:
 		Events.boss_health_changed.emit(hp, max_hp)
 
-func _boss_frames() -> SpriteFrames:
-	if _boss_frames_cache != null:
-		return _boss_frames_cache
-	_boss_frames_cache = GameData.kenney_boss_frames()
-	return _boss_frames_cache
-
-
 ## 按变体种类挑帧源。
 ##
-## 现在工程里只有**一套**丧尸帧：Kenney zoimbie1（43px 画布、内容填满、
-## 脚底贴底）。首领用 robot1，玩家用 survivor1。
+## 优先级：首领 → 阶段2 自制素材（variant["sprite"]）→ 精英表 → Kenney 通用帧。
+## 自制素材是单帧 SpriteFrames，动画活性由 wobble/闪白/翻转承担（见 GameData.monster_frames）。
 ##
-## ⚠ 为什么不给每个变体分配各自的帧源：Kenney 包里一共只有 3 套角色皮肤
-## （zoimbie1 / robot1 / survivor1），扣掉首领和玩家能留给"五种丧尸"的
-## 只有 1 套 —— 而用玩家皮演丧尸本身就不合适。所以**变体之间的视觉区分
-## 只能靠 tint（兵种色）+ scale_mult（体型）+ 血条**，素材层面必然共用。
-## 这不是偷懒，是素材数量的硬约束。
-##
-## 历史上这里曾按 variant["sheet"] / variant["sequence"] 分派到
-## CraftPix 128px 横条表和 gunner 整幅序列帧。这两条素材路径现在都已弃用
-## （实测见 game_data.gd 里 ZOMBIE_VARIANTS 的 anchor 注释），继续保留
-## 分派逻辑只会让人以为"五种丧尸长得不一样"，是纯粹的误导 ——
-## 所以下面**显式忽略** sheet/sequence，而不是留一个失效的分支。
-##
-## 缩放与锚点由变体表里的 scale_mult / anchor 各自指定，这里只负责"帧从哪来"。
+## 历史背景：工程里曾有按 variant["sheet"]/["sequence"] 分派 CraftPix 横条表
+## 和 gunner 序列帧的路径，素材弃用后这两条分支已删。
 func _frames_for(_variant: Dictionary, p_boss: bool, p_elite: bool) -> SpriteFrames:
 	if p_boss:
 		return _boss_frames()
+	var sprite_key := String(variant.get("sprite", ""))
+	if sprite_key != "" and GameData.MONSTER_SPRITES.has(sprite_key):
+		return GameData.monster_frames(sprite_key)
 	if p_elite:
 		return GameData.elite_zombie_frames()
 	return GameData.kenney_zombie_frames()
+
+
+func _boss_frames() -> SpriteFrames:
+	if _boss_frames_cache != null:
+		return _boss_frames_cache
+	_boss_frames_cache = GameData.monster_frames("boss_abomination")
+	return _boss_frames_cache
 
 
 ## ---------------------------------------------------------------- 每帧更新
@@ -870,11 +865,10 @@ func _draw() -> void:
 
 	# ---- 精英/首领血条 ----
 	var width := 72.0 if is_boss else 42.0
-	# 首领血条 y 由 BOSS_ART_SCALE 推导，两者是一对，改一个必须改另一个：
-	# Kenney 43px 帧 × 2.6 → 头顶在 -43×2.6 ≈ -112，
-	# 血条（高 5px）下沿 -118，留 6px 空隙，与精英的观感一致。
-	# （原 -78 是旧序列帧 110px 高时的校准值，素材换 Kenney 后已失准。）
-	var y := -123.0 if is_boss else -52.0
+	# 首领血条 y 与首领屏幕高是一对：内容 120px × 缩放后正好等于
+	# BOSS_TARGET_HEIGHT(110)——头顶在 -110，血条（高 5px）下沿 -118，
+	# 留 6px 空隙，与精英的观感一致。（原 -78/-123 是旧素材时代的校准值。）
+	var y := (-GameData.BOSS_TARGET_HEIGHT - 12.0) if is_boss else -52.0
 	draw_rect(Rect2(-width * 0.5, y, width, 5.0), Color(0.08, 0.04, 0.05, 0.9), true)
 	var hp_col := Color("#c93c35") if is_boss else (Color("#ff6b5e") if elite_kind == 0 else (Color("#e9a14e") if elite_kind == 1 else Color("#65e887")))
 	draw_rect(Rect2(-width * 0.5, y, width * hp_ratio(), 5.0), hp_col, true)

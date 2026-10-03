@@ -426,7 +426,10 @@ const ZOMBIE_VARIANTS := [
 		"sheet": 0, "label": "撕裂者", "radius": 11.0,
 		"hp_mult": 0.6, "speed_mult": 1.05, "damage_mult": 0.9, "xp": 2.0,
 		"scale_mult": 0.92, "tint": Color(1.0, 0.45, 0.62),
-		"anchor": Vector2(0.5, -21.5), "weight": 7.0, "min_wave": 3,
+		"sprite": "ripper",
+		# 阶段2 自制素材：64px 画布、内容 43px 高、脚底贴画布底、水平居中
+		# → anchor 与 Kenney 同口径（脚底落在节点原点），水平无需修正。
+		"anchor": Vector2(0.0, -32.0), "weight": 7.0, "min_wave": 3,
 		"behavior": "ripper",
 		"lunge": {"range_min": 130.0, "range_max": 310.0, "windup": 0.32,
 			"dash": 0.20, "dash_mult": 3.4, "damage_mult": 1.3, "cooldown": 2.6},
@@ -437,7 +440,8 @@ const ZOMBIE_VARIANTS := [
 		"sheet": 0, "label": "喷吐者", "radius": 13.0,
 		"hp_mult": 1.4, "speed_mult": 0.78, "damage_mult": 1.0, "xp": 3.0,
 		"scale_mult": 1.05, "tint": Color(0.55, 1.0, 0.55),
-		"anchor": Vector2(0.5, -21.5), "weight": 6.0, "min_wave": 4,
+		"sprite": "spitter", "anchor": Vector2(0.0, -32.0),
+		"weight": 6.0, "min_wave": 4,
 		"behavior": "spitter",
 		"kite_dist": 190.0,
 		"ranged": {"range": 430.0, "interval": 2.2, "speed": 250.0, "damage_scale": 0.9},
@@ -448,7 +452,8 @@ const ZOMBIE_VARIANTS := [
 		"sheet": 0, "label": "重锤", "radius": 18.0,
 		"hp_mult": 5.0, "speed_mult": 0.55, "damage_mult": 1.6, "xp": 8.0,
 		"scale_mult": 1.35, "tint": Color(0.72, 0.62, 0.55),
-		"anchor": Vector2(0.5, -21.5), "weight": 3.5, "min_wave": 6,
+		"sprite": "smasher", "anchor": Vector2(0.0, -32.0),
+		"weight": 3.5, "min_wave": 6,
 		"behavior": "smasher",
 		"slam": {"trigger": 125.0, "radius": 120.0, "windup": 0.55,
 			"damage_mult": 1.8, "cooldown": 4.5},
@@ -460,7 +465,8 @@ const ZOMBIE_VARIANTS := [
 		"sheet": 0, "label": "溺亡者", "radius": 12.0,
 		"hp_mult": 1.1, "speed_mult": 0.95, "damage_mult": 1.0, "xp": 2.0,
 		"scale_mult": 1.0, "tint": Color(0.45, 0.85, 0.95),
-		"anchor": Vector2(0.5, -21.5), "weight": 0.0,
+		"sprite": "drowned", "anchor": Vector2(0.0, -32.0),
+		"weight": 0.0,
 		"behavior": "drowned",
 		"water_speed_mult": 1.3, "land_speed_mult": 0.85,
 	},
@@ -540,11 +546,23 @@ const BOSS_ANCHOR := Vector2(
 ## 首领在 HUD 血条上的显示名。
 const BOSS_DISPLAY_NAME := "腐烂巨兽"
 
-## 首领精灵缩放（Kenney 43px 帧）。原 2.1 → 2.6：
-## 任务要求"体型明显更大"，43 × 2.6 ≈ 112px 屏幕高（原来 ≈ 90px），
-## 是普通丧尸（33px）的 3.4 倍、比精英（约 43px）高出两倍多。
-## zombie.gd 的首领血条 y 坐标由这个值推导（见那里注释），两者是一对。
-const BOSS_ART_SCALE := 2.6
+## ---- 阶段2：自制怪物精灵 ----
+##
+## Blender 程序化建模 + 正交俯拍渲染 + PIL 归一化（描边/阴影统一在 PIL 里做），
+## 生成管线存档见 workspace monster_render/（build_monsters.py / normalize_sprites.py）。
+## 素材为近中性灰基色，游戏内由 variant["tint"] 染色 —— 与 Kenney 旧怪共用
+## 同一套"兵种色"识别系统，保证全队色调统一。
+##
+## content_h = 素材里角色的实际像素高（脚底贴画布底）。非 Boss 统一 43，
+## 与 Kenney 帧同高，zombie.gd 的既有缩放数学原样适用；
+## Boss 内容 120，首领缩放 = BOSS_TARGET_HEIGHT / content_h。
+const MONSTER_SPRITES := {
+	"ripper": {"path": "res://assets/characters/monsters/ripper.png", "canvas": 64.0, "content_h": 43.0},
+	"spitter": {"path": "res://assets/characters/monsters/spitter.png", "canvas": 64.0, "content_h": 43.0},
+	"smasher": {"path": "res://assets/characters/monsters/smasher.png", "canvas": 64.0, "content_h": 43.0},
+	"drowned": {"path": "res://assets/characters/monsters/drowned.png", "canvas": 64.0, "content_h": 43.0},
+	"boss_abomination": {"path": "res://assets/characters/monsters/boss_abomination.png", "canvas": 256.0, "content_h": 120.0},
+}
 
 ## 首领阶段阈值：血量比例降到该值以下进入下一阶段（1 → 2 → 3）。
 const BOSS_PHASE_2_AT := 0.66
@@ -1006,6 +1024,36 @@ func elite_zombie_frames() -> SpriteFrames:
 			atlas.region = Rect2(frame_width * i, 0.0, frame_width, tex.get_height())
 			sf.add_frame(anim_name, atlas)
 	_sequence_cache[KEY] = sf
+	return sf
+
+
+## 阶段2 自制怪物精灵（单帧）。五个动画状态共用同一帧 ——
+## 动起来的责任交给 zombie.gd 已有的那套表现层：行走起伏(wobble)、
+## 受击闪白、朝向翻转、蓄力泛红。单帧素材省掉逐动作绘制，
+## 视觉活性与 Kenney 旧怪一致。
+func monster_frames(key: String) -> SpriteFrames:
+	var cache_key := "monster_" + key
+	if _sequence_cache.has(cache_key):
+		return _sequence_cache[cache_key]
+	var sf := SpriteFrames.new()
+	if sf.has_animation("default"):
+		sf.remove_animation("default")
+	var info: Dictionary = MONSTER_SPRITES.get(key, {})
+	var tex: Texture2D = load(String(info.get("path", ""))) as Texture2D
+	if tex == null:
+		push_warning("怪物素材缺失：%s（退回 Kenney 帧）" % key)
+		return kenney_zombie_frames()
+	var groups := {
+		"idle": [6.0, true], "walk": [8.0, true], "attack": [10.0, false],
+		"hurt": [10.0, false], "dead": [7.0, false],
+	}
+	for anim_name: String in groups:
+		var gi: Array = groups[anim_name]
+		sf.add_animation(anim_name)
+		sf.set_animation_speed(anim_name, float(gi[0]))
+		sf.set_animation_loop(anim_name, bool(gi[1]))
+		sf.add_frame(anim_name, tex)
+	_sequence_cache[cache_key] = sf
 	return sf
 
 
