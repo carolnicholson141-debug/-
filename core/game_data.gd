@@ -162,7 +162,7 @@ const PLAYER_SPRITE_SCALE := 1.0
 ## 判定圈在地上、贴图在天上，两者差了将近两个身位。
 ## 这个值必须和 player.tscn 里 HeroSprite.offset 保持一致 ——
 ## 两处各写一份字面量，是之前口径分叉的根源。
-const PLAYER_SPRITE_OFFSET := Vector2(0.0, -21.5)
+const PLAYER_SPRITE_OFFSET := Vector2(0.0, -28.0)
 
 ## 闪避动画帧率。素材是 22 帧的后跳，34fps 播完约 0.65s。
 ## 参照：闪避无敌 0.42s、冷却 2.2s。太快看不清动作，太慢会拖住手感。
@@ -374,25 +374,25 @@ const ZOMBIE_VARIANTS := [
 		"sheet": 1, "label": "普通", "radius": 12.0,
 		"hp_mult": 1.0, "speed_mult": 1.0, "damage_mult": 1.0, "xp": 1.0,
 		"scale_mult": 1.0, "tint": Color(0.88, 0.95, 0.88),
-		"anchor": Vector2(0.5, -21.5), "weight": 62.0,
+		"anchor": Vector2(0.0, -28.0), "weight": 62.0,
 	},
 	{
 		"sheet": 2, "label": "疾行者", "radius": 11.0,
 		"hp_mult": 0.75, "speed_mult": 1.35, "damage_mult": 0.8, "xp": 1.0,
 		"scale_mult": 0.95, "tint": Color(0.62, 0.92, 1.00),
-		"anchor": Vector2(1.0, -21.5), "weight": 22.0,
+		"anchor": Vector2(0.0, -28.0), "weight": 22.0,
 	},
 	{
 		"sheet": 3, "label": "壮尸", "radius": 14.0,
 		"hp_mult": 1.9, "speed_mult": 0.82, "damage_mult": 1.5, "xp": 3.0,
 		"scale_mult": 1.1, "tint": Color(1.00, 0.84, 0.48),
-		"anchor": Vector2(0.5, -21.5), "weight": 12.0,
+		"anchor": Vector2(0.0, -28.0), "weight": 12.0,
 	},
 	{
 		"sheet": 4, "label": "坦克", "radius": 17.0,
 		"hp_mult": 4.2, "speed_mult": 0.62, "damage_mult": 2.0, "xp": 7.0,
 		"scale_mult": 1.28, "tint": Color(1.00, 0.58, 0.52),
-		"anchor": Vector2(0.5, -21.5), "weight": 4.0,
+		"anchor": Vector2(0.0, -28.0), "weight": 4.0,
 	},
 	{
 		# 第 5 种：机枪尸（远程）。与前四只共用同一套 Kenney 帧 —— 见
@@ -410,7 +410,7 @@ const ZOMBIE_VARIANTS := [
 		"weight": 9.0,
 		"sequence": "gunner",
 		# anchor 口径与其余四只一致（43px Kenney 帧，实测 -21.5）。
-		"anchor": Vector2(0.5, -21.5),
+		"anchor": Vector2(0.0, -28.0),
 		# 远程参数。伤害 = 该丧尸的近战伤害 × damage_scale。
 		# range 取 380：明显小于 LOD 分界（约 824px），
 		# 所以"能打到你的机枪尸"必定在画面里，不会出现视野外冷枪。

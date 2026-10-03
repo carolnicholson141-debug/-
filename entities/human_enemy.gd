@@ -59,7 +59,7 @@ func _ensure_sprite() -> void:
 	_spr = Sprite2D.new()
 	_spr.texture = TEX_BY_KIND[clampi(kind, 0, 2)]
 	_spr.scale = Vector2(SPRITE_SCALE, SPRITE_SCALE)
-	_spr.position = Vector2(0.0, GROUND_Y - 21.5 * SPRITE_SCALE)
+	_spr.position = Vector2(0.0, GROUND_Y - 28.0 * SPRITE_SCALE)
 	add_child(_spr)
 
 func tick(delta: float, player: Node2D) -> void:
@@ -89,7 +89,7 @@ func tick(delta: float, player: Node2D) -> void:
 		Events.weapon_fired_at.emit(muzzle, dir)
 	# 视觉：呼吸 bob + 朝向翻转 + 开火白闪。
 	if _spr != null:
-		_spr.position.y = GROUND_Y - 21.5 * SPRITE_SCALE + sin(phase * 7.0) * 1.2
+		_spr.position.y = GROUND_Y - 28.0 * SPRITE_SCALE + sin(phase * 7.0) * 1.2
 		_spr.flip_h = dir.x < -0.01
 		_spr.modulate = _base_color.lerp(
 			Color(1.7, 1.7, 1.4), clampf(_flash / 0.12, 0.0, 1.0))

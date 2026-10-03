@@ -78,6 +78,10 @@ var _boss_bar: ProgressBar
 var _boss_name: Label
 ## 三个阶段各一套填充样式，预建复用（与 _hp_fill_normal 同一理由：避免高频重建）。
 var _boss_fill: Array[StyleBoxFlat] = []
+var _boss_phase_label: Label
+
+## 全屏渐晕（阶段4：统一蓝灰夜色调）。静态纹理画一次，零每帧开销。
+var _vignette: Control
 
 ## 由 Main 注入：返回当前开火模式字符串。
 ##
@@ -124,6 +128,7 @@ func _build() -> void:
 	_root.add_theme_font_override("font", PIXEL_FONT)
 	add_child(_root)
 
+	_build_vignette()
 	_build_hud_frames()
 	_build_xp_bar()
 	_build_health_bar()
@@ -146,6 +151,47 @@ func _build_hud_frames() -> void:
 	# 这些图片是新 HUD 的金属外框；文字和数值仍由下面的实时控件绘制。
 	_add_hud_art(HP_PANEL_ART, Vector2(16.0, 20.0), Vector2(270.0, 126.0), "HpPanelArt")
 	_add_hud_art(WAVE_PANEL_ART, Vector2(500.0, 0.0), Vector2(280.0, 120.0), "WavePanelArt")
+
+
+## 全屏渐晕：四角压暗 + 顶部一层极淡的冷色，把整屏往蓝灰夜色上收。
+## 只在构建时画一次，运行期零开销；压在所有面板之下。
+##
+## ⚠ 刻意**不用** GradientTexture2D：实测在这条渲染管线下它会把整张矩形
+## 采样成不透明白（整屏被盖成白板）。改用阶梯矩形手绘渐变 —— N 条 alpha
+## 递增的色带，视觉平滑度足够，行为完全确定。
+func _build_vignette() -> void:
+	_vignette = Control.new()
+	_vignette.name = "Vignette"
+	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_vignette.show_behind_parent = true
+	_root.add_child(_vignette)
+	_vignette.draw.connect(_on_vignette_draw)
+
+
+func _on_vignette_draw() -> void:
+	var size := _vignette.size
+	if size.x <= 0.0 or size.y <= 0.0:
+		return
+	const STEPS := 14
+	const EDGE_DEPTH := 0.30     # 四角最深的压暗强度
+	const TOP_TINT := 0.055      # 顶部冷色薄纱强度
+	var step_x := size.x / float(STEPS)
+	var step_y := size.y / float(STEPS)
+	var dark := Color(0.006, 0.010, 0.018)
+	var cool := Color(0.42, 0.56, 0.68)
+	# 四边：离边缘越近 alpha 越深（二次曲线，避免"阶梯感"）
+	for i in STEPS:
+		var f := float(STEPS - i) / float(STEPS)   # 1(边缘) → 1/14(内侧)
+		var a := EDGE_DEPTH * f * f
+		_vignette.draw_rect(Rect2(0.0, 0.0, size.x - step_x * i, step_y), Color(dark.r, dark.g, dark.b, a))
+		_vignette.draw_rect(Rect2(0.0, size.y - step_y + step_y * i, size.x - step_x * i, step_y), Color(dark.r, dark.g, dark.b, a))
+		_vignette.draw_rect(Rect2(0.0, 0.0, step_x, size.y - step_y * i), Color(dark.r, dark.g, dark.b, a))
+		_vignette.draw_rect(Rect2(size.x - step_x + step_x * i, 0.0, step_x, size.y - step_y * i), Color(dark.r, dark.g, dark.b, a))
+	# 顶部冷色薄纱：8 条递减的冷色带
+	for i in 8:
+		var f2 := 1.0 - float(i) / 8.0
+		_vignette.draw_rect(Rect2(0.0, step_y * i, size.x, step_y), Color(cool.r, cool.g, cool.b, TOP_TINT * f2 * f2))
 
 
 func _add_hud_art(texture: Texture2D, pos: Vector2, art_size: Vector2, node_name: String) -> TextureRect:
@@ -683,6 +729,16 @@ func _build_boss_bar() -> void:
 	_boss_bar.add_theme_stylebox_override("fill", _boss_fill[0])
 	_boss_bar_wrap.add_child(_boss_bar)
 
+	# 阶段标签：血条右端小块，阶段切换时换字 + 闪一下。
+	_boss_phase_label = _make_label("阶段 1", 11, Color("#ffd9d0"))
+	_boss_phase_label.name = "BossPhase"
+	_boss_phase_label.position = Vector2(388.0, 18.0)
+	_boss_phase_label.size = Vector2(52.0, 14.0)
+	_boss_phase_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_boss_phase_label.add_theme_color_override("font_outline_color", Color(0.05, 0.02, 0.02, 0.9))
+	_boss_phase_label.add_theme_constant_override("outline_size", 3)
+	_boss_bar_wrap.add_child(_boss_phase_label)
+
 
 ## ---------------------------------------------------------------- 信号回调
 
@@ -804,6 +860,8 @@ func _on_boss_spawned(_pos: Vector2) -> void:
 		_boss_name.text = GameData.BOSS_DISPLAY_NAME
 		_boss_bar.value = _boss_bar.max_value
 		_boss_bar.add_theme_stylebox_override("fill", _boss_fill[0])
+		if _boss_phase_label != null:
+			_boss_phase_label.text = "阶段 1"
 		_boss_bar_wrap.visible = true
 
 
@@ -818,11 +876,21 @@ func _on_boss_phase(phase: int, _pos: Vector2) -> void:
 	if _boss_bar != null:
 		var idx := clampi(phase - 1, 0, _boss_fill.size() - 1)
 		_boss_bar.add_theme_stylebox_override("fill", _boss_fill[idx])
+		# 阶段切换的"受击级"反馈：血条整体闪一下白，让换挡可被余光捕获。
+		_boss_bar.modulate = Color(1.9, 1.9, 1.9)
+		var ftw := create_tween()
+		ftw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+		ftw.tween_property(_boss_bar, "modulate", Color.WHITE, 0.28)
+	if _boss_phase_label != null:
+		var phase_names := ["", "警觉", "狂暴", "嗜血"]
+		_boss_phase_label.text = "阶段%d·%s" % [phase, String(phase_names[clampi(phase, 0, 3)])]
+		_boss_phase_label.add_theme_color_override(
+			"font_color", [Color("#ffd9d0"), Color("#ffc9a8"), Color("#ffb0a0"), Color("#ff8f8f")][clampi(phase, 0, 3)])
 	if _elite_alert == null:
 		return
 	var phase_colors := [Color("#ffcf6b"), Color("#ff9a5e"), Color("#ff4d43")]
-	var phase_names := ["", "警觉", "狂暴", "嗜血"]
-	_elite_alert.text = "☠ 首领进入%s阶段 %d！" % [String(phase_names[clampi(phase, 0, 3)]), phase]
+	var phase_names2 := ["", "警觉", "狂暴", "嗜血"]
+	_elite_alert.text = "☠ 首领进入%s阶段 %d！" % [String(phase_names2[clampi(phase, 0, 3)]), phase]
 	_elite_alert.add_theme_color_override("font_color", phase_colors[clampi(phase - 1, 0, 2)])
 	_elite_alert.modulate = Color.WHITE
 	var tw := create_tween()

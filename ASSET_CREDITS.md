@@ -12,6 +12,20 @@
 
 角色统一采用相同的俯视角像素画布和尺寸；敌我阵营通过皮肤、颜色、尺寸和血条区分。
 
+# 怪物与 Boss 素材（2026-10-03 升级任务新增）
+
+- `assets/characters/monsters/`（撕裂者 / 喷吐者 / 重锤 / 溺亡者 / boss_abomination）：
+  本项目自制 —— Blender 程序化建模 + 正交俯拍渲染（EEVEE，透明背景），
+  PIL 归一化并统一烘焙渐变椭圆阴影与深蓝灰轮廓光。
+  生成管线脚本存档：`~/.zcode/workspace/default/monster_render/`
+  （build_monsters.py / normalize_sprites.py，模型存档 monsters.blend）。
+  素材为近中性灰基色，游戏内由变体 tint 染色；无外部素材来源，随本项目授权。
+- `assets/characters/kenney/*.png`：在 Kenney 原始 CC0 帧基础上
+  烘焙了同规格地面阴影与顶部轮廓光（画布 43→64，脚底对齐 row 60），
+  与自制怪物的表现层口径一致。原素材仍为 Kenney CC0。
+- 精英丧尸横条表（elite_zombie_walk.png）保持原始素材，未烘焙阴影
+  （精英以血条与大体型做视觉识别，属预期差异）。
+
 # 武器素材说明
 
 - 子弹：Project Cordon Sprites 的 `bullet.png`
