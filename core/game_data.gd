@@ -698,6 +698,22 @@ const ELITE_EVERY_WAVES := 5           # 每几波刷一只精英
 const BOSS_EVERY_WAVES := 10           # 每几波出现首领
 const ELITE_STAT_MULT := 6.0           # 精英的血量/伤害倍率
 
+## ---- 阶段3：水域 ----
+
+## 每局生成几片水域。
+const WATER_ZONE_COUNT := 4
+## 水域与其他掉落物/彼此的最小间距（用于 _random_loot_position 的占位表）。
+const WATER_ZONE_SPACING := 420.0
+## 非水生单位在水中乘在移动上的速度倍率。0.55 = 明显拖慢但能穿行，
+## 水域是"可以借道的危险地形"而不是墙。
+const WATER_SLOW := 0.55
+## 各水域的孵化间隔基准（实际按 0.85~1.25 随机浮动，开局再各错开一截）。
+const WATER_SPAWN_INTERVAL := 9.0
+## 浮出预警时长：涟漪收缩圈给玩家的反应窗口。
+const WATER_TELEGRAPH := 0.9
+## 场上同时存活的溺亡者上限（全局，跨水域合计）。
+const WATER_MAX_DROWNED := 6
+
 ## 刷怪环半径 = 视口对角线/2 + 这个余量，保证在视野外生成。
 ## 别调太大：这个值直接决定"丧尸从出现到走到你面前"要多久，
 ## 太大开局会有十几秒无事可做的冷场。
@@ -927,6 +943,14 @@ func pick_zombie_variant(wave: int = 1) -> Dictionary:
 		if roll <= 0.0:
 			return v
 	return pool[0]
+
+
+## 按显示名取变体（水域孵化溺亡者用）。找不到退回普通丧尸，不中断游戏。
+func variant_by_label(label: String) -> Dictionary:
+	for v: Dictionary in ZOMBIE_VARIANTS:
+		if String(v.get("label", "")) == label:
+			return v
+	return ZOMBIE_VARIANTS[0]
 
 
 ## 取得（并缓存）某个丧尸的 SpriteFrames。

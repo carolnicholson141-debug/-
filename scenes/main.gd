@@ -24,6 +24,7 @@ const ITEM_SCRIPT := preload("res://entities/item_pickup.gd")
 const HUMAN_ENEMY_SCRIPT := preload("res://entities/human_enemy.gd")
 const HUMAN_BULLET_SCRIPT := preload("res://entities/human_bullet.gd")
 const GRENADE_SCRIPT := preload("res://entities/grenade.gd")
+const WATER_ZONE_SCRIPT := preload("res://entities/water_zone.gd")
 
 const ZOMBIE_PREWARM := 260
 # 超出存活上限的余量留给尚未播完死亡动画的尸体。
@@ -76,6 +77,8 @@ var item_pickups: Array[Node] = []
 var human_enemies: Array[Node] = []
 var human_bullets: Array[Node] = []
 var grenades: Array[Node] = []
+## 水域（阶段3）。元素是 water_zone.gd 实例，挂在 entities 下。
+var _water_zones: Array[Node] = []
 var _human_spawn_timer := 12.0
 var _melee_timer := 0.0
 var _item_key_lock := 0.0
@@ -534,6 +537,7 @@ func start_run() -> void:
 	_elite_serial = 0
 	_spawn_map_loot()
 	_spawn_humans(2)
+	_spawn_water_zones()
 
 	if _stress_count > 0:
 		player.invincible = true
@@ -690,6 +694,10 @@ func _clear_entities() -> void:
 		if is_instance_valid(grenade):
 			grenade.queue_free()
 	grenades.clear()
+	for w in _water_zones:
+		if is_instance_valid(w):
+			w.queue_free()
+	_water_zones.clear()
 
 	grid.clear()
 
@@ -774,6 +782,10 @@ func _physics_process(delta: float) -> void:
 	t = _now()
 	_tick_loot(delta)
 	_mark(t, "loot")
+
+	t = _now()
+	_tick_water(delta)
+	_mark(t, "water")
 
 	t = _now()
 	_tick_humans(delta)
@@ -909,11 +921,13 @@ func _tick_zombies(delta: float) -> void:
 			z.set_lod_hidden(true)
 			# 视野外的丧尸照样算分离：它们每次 tick 之间本来就隔了好几帧，
 			# 再跳过一次就是十几帧不更新，走进视野时会明显是散的。
+			z.speed_scale = _zombie_speed_scale(z)
 			z.tick(far_delta, ppos, player, grid, true)
 		else:
 			near += 1
 			z.set_lod_hidden(false)
 			# 视野内才做分离的隔帧分摊 —— 这里才是丧尸最密、分离最贵的地方。
+			z.speed_scale = _zombie_speed_scale(z)
 			z.tick(delta, ppos, player, grid, stride <= 1 or (i + frame) % stride == 0)
 
 	_lod_near = near
@@ -980,6 +994,87 @@ func _random_loot_position(occupied: Array[Vector2], min_distance: float) -> Vec
 		if clear:
 			return candidate
 	return Vector2(arena * 0.65, arena * 0.35)
+
+
+## ---------------------------------------------------------------- 水域（阶段3）
+
+## 每局撒 WATER_ZONE_COUNT 片水域。位置走 _random_loot_position 的占位表
+## （避开出生安全区、宝箱、道具和彼此），种子固定时整张水图可复现。
+func _spawn_water_zones() -> void:
+	for w in _water_zones:
+		if is_instance_valid(w):
+			w.queue_free()
+	_water_zones.clear()
+	var occupied: Array[Vector2] = []
+	for chest in chests:
+		occupied.append(chest.position)
+	for item in item_pickups:
+		occupied.append(item.position)
+	for _i in GameData.WATER_ZONE_COUNT:
+		var p := _random_loot_position(occupied, GameData.WATER_ZONE_SPACING)
+		occupied.append(p)
+		var zone := WATER_ZONE_SCRIPT.new()
+		entities.add_child(zone)
+		zone.setup(p, Vector2(randf_range(130.0, 180.0), randf_range(100.0, 145.0)))
+		zone.emerge.connect(_on_water_emerge)
+		_water_zones.append(zone)
+
+
+## 推进水域（涟漪动画 + 孵化计时），并把玩家这帧的水况速度写回。
+func _tick_water(delta: float) -> void:
+	# player 声明成 Node2D，.alive 是动态属性，:= 推断不出布尔，显式标类型。
+	var alive: bool = player.alive
+	for w in _water_zones:
+		if is_instance_valid(w):
+			w.tick(delta, alive)
+	var ps := 1.0
+	if alive:
+		for w in _water_zones:
+			if is_instance_valid(w) and w.contains_point(player.position):
+				ps = GameData.WATER_SLOW
+				break
+	player.speed_scale = ps
+
+
+## 某只丧尸当前的水况速度倍率。
+## 溺亡者水里加速、离水变慢（它们是这滩水的主人）；其余单位进水减速。
+## 每帧每只丧尸调用，只做几次平方距离判定。
+func _zombie_speed_scale(z: Zombie) -> float:
+	if _water_zones.is_empty():
+		return 1.0
+	var drowned := z.behavior == "drowned"
+	for w in _water_zones:
+		if is_instance_valid(w) and w.contains_point(z.position):
+			return z.water_speed_mult if drowned else GameData.WATER_SLOW
+	return z.land_speed_mult if drowned else 1.0
+
+
+## 水域孵化回调：正式刷一只溺亡者。上限保护（全局溺亡数 / 同屏总数 / 玩家存活）
+## 全部在这里收口，水域自身只管"什么时候、在哪冒头"。
+func _on_water_emerge(pos: Vector2) -> void:
+	if _game_over or player == null or not player.alive:
+		return
+	if _count_drowned() >= GameData.WATER_MAX_DROWNED or grid.object_count() >= GameData.MAX_ALIVE:
+		return
+	var z: Zombie = zombie_pool.acquire()
+	z.world = self
+	z.spawn(
+		GameData.variant_by_label("溺亡者"),
+		GameData.wave_hp_mult(director.wave),
+		GameData.wave_speed_mult(director.wave),
+		GameData.wave_damage_mult(director.wave),
+		false,
+		pos
+	)
+	zombies.append(z)
+
+
+func _count_drowned() -> int:
+	var n := 0
+	for z in zombies:
+		if z.alive and z.behavior == "drowned":
+			n += 1
+	return n
 
 func _tick_loot(delta: float) -> void:
 	if not player.alive:

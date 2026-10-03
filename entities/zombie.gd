@@ -112,6 +112,12 @@ var _slam_flash: float = 0.0
 ## 乘在移动积分上而不是 speed 上，出池重置为 1 即可，不污染 wave 速度倍率。
 var speed_scale: float = 1.0
 
+## 水况速度倍率（阶段3）。普通怪由 Main 直接写 speed_scale；
+## 溺亡者按"在水中/离水"取不同值，Main 读这两个字段。
+## 出池时从变体表灌入，普通变体恒为 1.0。
+var water_speed_mult: float = 1.0
+var land_speed_mult: float = 1.0
+
 ## ---- 阶段1：Boss 状态 ----
 ## 当前阶段（1/2/3）。血量比例越过 GameData.BOSS_PHASE_*_AT 时升阶段。
 var boss_phase: int = 1
@@ -214,6 +220,9 @@ func spawn(
 	_slam_windup = 0.0
 	_slam_flash = 0.0
 	speed_scale = 1.0
+	# 水况倍率：只有溺亡者的变体表带了这两个键，其余读默认 1.0。
+	water_speed_mult = float(variant.get("water_speed_mult", 1.0))
+	land_speed_mult = float(variant.get("land_speed_mult", 1.0))
 	boss_phase = 1
 	_boss_summon_cd = GameData.BOSS_SUMMON_INTERVAL * 0.6
 	_boss_charge_cd = float(GameData.BOSS_PHASE_CHARGE_CD[0])

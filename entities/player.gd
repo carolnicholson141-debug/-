@@ -90,6 +90,10 @@ var aim_provider: Callable = Callable()
 ## 而玩家一死，全场就失去负载 —— 测出来的是"尸体堆了多久"，毫无意义。
 var invincible: bool = false
 
+## 外部速度修正（阶段3：水域减速）。由 Main 每帧写回，默认 1.0。
+## 乘在移动积分上、不乘在闪避位移上 —— 闪避是爆发动作，不该被水面拖住。
+var speed_scale: float = 1.0
+
 @onready var camera: Camera2D = $Camera2D
 @onready var hero_sprite: AnimatedSprite2D = $HeroSprite
 
@@ -131,6 +135,7 @@ func reset() -> void:
 	revive_charges = 0
 	_fire_hold = 0.0
 	_recoil_dir = Vector2.ZERO
+	speed_scale = 1.0
 	_attack_flash = 0.0
 	_camera_shake_left = 0.0
 	_camera_shake_strength = 0.0
@@ -284,7 +289,7 @@ func _move(delta: float) -> void:
 	var speed := float(stats["move_speed"])
 	if is_sprinting():
 		speed *= GameData.PLAYER_SPRINT_MULT
-	position += dir * speed * delta
+	position += dir * speed * speed_scale * delta
 	# 限制在场地内，防止跑出边界后刷怪环算错位置
 	var lim := GameData.ARENA_HALF_SIZE
 	position.x = clampf(position.x, -lim, lim)

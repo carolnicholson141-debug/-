@@ -104,6 +104,7 @@ func _ready() -> void:
 	Events.upgrade_applied.connect(_on_upgrade_applied)
 	Events.elite_spawned.connect(_on_elite_spawned)
 	Events.elite_charge_warning.connect(_on_elite_charge_warning)
+	Events.water_warning.connect(_on_water_warning)
 	Events.boss_spawned.connect(_on_boss_spawned)
 	Events.boss_health_changed.connect(_on_boss_health)
 	Events.boss_phase_changed.connect(_on_boss_phase)
@@ -771,6 +772,19 @@ func _on_elite_charge_warning(_pos: Vector2) -> void:
 	tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_interval(0.62)
 	tw.tween_property(_elite_alert, "modulate", Color(1.0, 1.0, 1.0, 0.0), 0.25)
+
+
+func _on_water_warning(_pos: Vector2) -> void:
+	if _elite_alert == null:
+		return
+	_elite_alert.text = "⚠ 水面有东西浮上来了！"
+	_elite_alert.add_theme_color_override("font_color", Color("#7fd8e8"))
+	_elite_alert.modulate = Color.WHITE
+	var tw := create_tween()
+	tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_interval(0.7)
+	tw.tween_property(_elite_alert, "modulate", Color(1.0, 1.0, 1.0, 0.0), 0.3)
 
 
 func _on_boss_spawned(_pos: Vector2) -> void:

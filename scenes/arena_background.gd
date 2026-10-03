@@ -25,6 +25,11 @@ func _ready() -> void:
 	_rendered_backdrop.z_index = 1
 	_rendered_backdrop.modulate = Color(1.0, 1.0, 1.0, 0.68)
 	add_child(_rendered_backdrop)
+	# 阶段3：静态地图装饰（积水/排水沟/废车/木箱/路障/垃圾/围栏/路灯/地标）。
+	# 相对 z=2 → 街景贴图之上、实体之下；只画一次，零运行期开销。
+	var decor := preload("res://scenes/map_decor.gd").new()
+	decor.name = "MapDecor"
+	add_child(decor)
 	_sync_backdrop_to_camera()
 	queue_redraw()
 
