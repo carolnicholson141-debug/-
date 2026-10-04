@@ -802,6 +802,11 @@ func take_damage(amount: float) -> void:
 	hp -= amount
 	_flash_left = 0.075
 	Events.enemy_hurt.emit(position, amount)
+	# 首领血条必须跟着掉。这条广播原先只在出池那一刻发过一次，
+	# 结果是 HUD 底部的首领血条整场停在满血（阶段标签会变、血条纹丝不动），
+	# 只有怪头顶那条自己 _draw 的血条在动。
+	if is_boss:
+		Events.boss_health_changed.emit(maxf(hp, 0.0), max_hp)
 
 	if hp > 0.0:
 		_hurt_shake = clampf(amount / maxf(max_hp, 0.001), 0.25, 1.0)

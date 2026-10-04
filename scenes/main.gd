@@ -552,8 +552,13 @@ func start_run() -> void:
 		# 首领即刷：走正式的刷怪通道（_on_director_spawn），保证与第 10 波
 		# 真正出现的首领走完全相同的初始化路径，测出来的就是线上行为。
 		# 必须放在 run_started 之后：run_started 会让 HUD 收起首领血条，
-		# 先刷首领的话血条刚亮出就被盖掉了。
-		_on_director_spawn(1, true, true, player.position)
+		# 先刷首领的话血条刚亮出就被"新一局收起血条"盖掉了。
+		#
+		# 波次抬到首领波、位置给在玩家上方 380px（视口半高 360 之外一点）：
+		# 第 1 波倍率下首领只有 1/4 血会被秒杀，而默认环形刷怪点在 800px 外，
+		# 坦克速度要走近 20 秒才入画 —— 两者都会让截图验收拍不到首领战斗。
+		director.jump_to_wave(GameData.BOSS_EVERY_WAVES)
+		_on_director_spawn(1, true, true, player.position, player.position + Vector2(0, -380))
 
 func _show_start_screen() -> void:
 	get_tree().paused = true
@@ -1312,7 +1317,7 @@ func _spawn_projectile(
 
 
 ## 波次导演刷怪回调
-func _on_director_spawn(count: int, elite: bool, boss: bool, player_pos: Vector2) -> void:
+func _on_director_spawn(count: int, elite: bool, boss: bool, player_pos: Vector2, at_pos: Vector2 = Vector2.INF) -> void:
 	var hp_mult := GameData.wave_hp_mult(director.wave)
 	var spd_mult := GameData.wave_speed_mult(director.wave)
 	var dmg_mult := GameData.wave_damage_mult(director.wave)
@@ -1343,7 +1348,7 @@ func _on_director_spawn(count: int, elite: bool, boss: bool, player_pos: Vector2
 			chosen_variant,
 			hp_mult, spd_mult, dmg_mult,
 			elite,
-			director.random_spawn_point(player_pos),
+			at_pos if at_pos != Vector2.INF else director.random_spawn_point(player_pos),
 			elite_kind,
 			boss
 		)

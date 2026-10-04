@@ -89,6 +89,18 @@ func tick(delta: float, player_pos: Vector2, alive_count: int) -> void:
 	on_spawn.call(count, false, false, player_pos)
 
 
+## 验收/调试入口：把导演直接跳到第 n 波（`--boss` 用）。
+##
+## 丧尸属性倍率按波次算，首领也一样。开局即刷的首领只拿到第 1 波倍率，
+## 血量约为正式出场时的 1/4，两三秒就被点死 —— 阶段 2/3、震地和死亡掉落
+## 根本来不及看。测试入口必须按首领真正出场的那一波配属性。
+func jump_to_wave(n: int) -> void:
+	wave = maxi(1, n)
+	_wave_timer = 0.0
+	_last_wave_remaining = -1
+	Events.wave_changed.emit(wave)
+
+
 func _spawn_elite(player_pos: Vector2) -> void:
 	if on_spawn.is_valid():
 		on_spawn.call(1, true, false, player_pos)
