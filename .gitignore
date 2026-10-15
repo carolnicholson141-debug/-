@@ -2,3 +2,6 @@
 bin/
 work/
 debug_shot.png
+debug_shot.png.import
+outputs/handoff_*.png
+outputs/handoff_*.png.import
